@@ -9,6 +9,14 @@ from fastapi.websockets import WebSocketDisconnect
 from twilio.twiml.voice_response import VoiceResponse, Connect, Say, Stream
 from dotenv import load_dotenv
 from agents.mcp import MCPServerStdio
+from fastapi import FastAPI, Form, Request, Response
+from twilio.twiml.messaging_response import MessagingResponse
+import json
+import os
+from twilio.twiml.voice_response import VoiceResponse, Gather
+from twilio.rest import Client
+from dotenv import load_dotenv
+from fastapi.middleware.cors import CORSMiddleware
 
 # ── MCP subprocess handles ──────────────────────────────────────────────────
 mcp_resend:             MCPServerStdio | None = None
@@ -26,9 +34,55 @@ OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 PORT = int(os.getenv('PORT', 3000))
 SYSTEM_MESSAGE = (
     """
-    You are SuperHelper, an AI assistant who has a couple of tools that you use to help the user.\n
-    Use the provided tools to reply to the user's requests.\n
-    The LinkedIn profile of your Lead Advisor is https://www.linkedin.com/in/seanwu2027/.
+    Your are an interview professional assistant whose job is to interview potential candidates
+    for a job and find if they match the position. In a nice and helpful way, discuss with the user
+    if they're fit for the role by asking them interview questions. Ask about their relevant
+    experiences with tech and skills needed by the job. 
+
+    Job description:
+    About the job
+    NVIDIA’s invention of the GPU in 1999 sparked the growth of the PC gaming market, redefined modern computer graphics, and revolutionized parallel computing. More recently, GPU deep learning ignited modern AI — the next era of computing — with the GPU acting as the brain of computers, robots, and self-driving cars that can perceive and understand the world. We're looking to grow our company, and form teams with the most inquisitive people in the world. Join us at the forefront of technological advancement.
+
+    We are looking for experienced software professionals to lead/extend our work on bringing delightful developer and user experience to the Python ecosystem. Our goal is to grow NVIDIA’s accelerated Python offerings to a mature product and make Python one of the first-class citizens for programming NVIDIA CUDA GPUs. You will be a crucial member of a team that is working to bring together the power of GPU acceleration and the expressibility and programmability of Python, by developing foundational software that supports many key products spanning the gamut of high performance computing, scientific computing, data analytics, deep learning, and professional graphics running on hardware ranging from gamer laptops to supercomputers to the cloud.
+
+    What You'll Be Doing
+
+    As a member of our team, you will use your design abilities, coding expertise, creativity, and community engagement to develop and enhance the functionality and performance of NVIDIA GPUs such that the current and future generations of Python users can enjoy the programmability and take full advantage of the NVIDIA CUDA platform, including both NVIDIA hardware and software. Specifically, you will be working to:
+
+    Architect, prioritize, and develop new features in CUDA Python
+    Analyze, identify, and improve the UX and performance of CUDA software in Python
+    Write effective, maintainable, and well-tested code for production use
+    Bridge the language gap between existing CUDA C/C++ solutions and Python
+    Understand and address unique challenges in developing and deploying Python GPU solutions
+    Identify key open source players in the Python/PyData ecosystem, and engage with them to develop and drive necessary protocols and standards for the NVIDIA CUDA platform
+    Evangelize CUDA programming in Python to encourage and empower adoption of the NVIDIA CUDA platform
+
+    What We Need To See
+
+    BS, MS or PhD degree in Computer Science, Electrical Engineering or related field (or equivalent experience)
+    5+ years of relevant industry experience or equivalent academic experience after BS
+    Strong Python programming and deployment skills with track record of driving formulation and/or adoption of Python community standards
+    Fluent C/C++ and CUDA programming skills
+    Background in AI, high performance computing or performance critical applications
+    Track record of developing/maintaining Python projects, and/or engaging with Python users on UX or performance improvements
+    Experience in designing, developing, tuning, navigating, and/or maintaining a large, complex, multi-language software stack (between C/C++/CUDA and Python)
+    Good written communication, collaboration, and presentation skills with ability of operating across team boundaries
+    Experience in distributed programming in C/C++/Python using MPI, Dask, Legate, or other distributed programming models/frameworks
+    Knowledge of generating Python bindings for mid- to large- size C/C++ codebases
+
+    Ways To Stand Out From The Crowd
+
+    Deep understanding in the CUDA programming model and language features
+    Familiarity with Python ecosystem, language idioms, and pioneering solutions
+    Dexterity with compilers, static/dynamic analysis techniques, and/or dynamic code generation/transpilation/compilation
+    Experience in using or developing the LLVM/Clang compiler infrastructure
+    Experience in memory management of a multi-language project or development of domain specific libraries/languages for AI, Data Analytics or Scientific Computing
+
+    With competitive salaries and a generous benefits package, we are widely considered to be one of the technology world’s most desirable employers. We have some of the most forward-thinking and hardworking people in the world working for us and, due to unprecedented growth, our exclusive engineering teams are rapidly growing. If you're a creative and autonomous engineer with a real passion for technology, we want to hear from you!
+
+    The base salary range is 184,000 USD - 425,500 USD. Your base salary will be determined based on your location, experience, and the pay of employees in similar positions.
+
+    Immediately ask the user challenging questions about their experience right away Be fast and talk fast!
     """
 
 
@@ -62,6 +116,14 @@ LOG_EVENT_TYPES = [
 SHOW_TIMING_MATH = False
 
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+    allow_credentials=True,
+)
 
 if not OPENAI_API_KEY:
     raise ValueError('Missing the OpenAI API key. Please set it in the .env file.')
@@ -148,6 +210,33 @@ async def shutdown_event():
     mcp_servers.clear()
 '''
 
+@app.post("/start")
+async def start_handler(request: Request):
+    request_data = await request.json()
+
+    email = request_data["email"]
+    linkedin = request_data["linkedin"]
+    phone = request_data["phone"]
+
+
+    """Initiate an outbound call to the user"""
+    client = Client(os.getenv('TWILIO_ACCOUNT_SID'), os.getenv('TWILIO_AUTH_TOKEN'))
+
+    #linkedin_result = await mcp_linkedin_scraper.call_tool("get_person_profile", {linkedin_url: linkedin})
+    print(f" \n CALLING!! {phone} \n")
+
+    try:
+        call = client.calls.create(
+            to=phone,
+            from_="+18446371063",
+            url="https://523d-50-175-245-62.ngrok-free.app/incoming-call"
+        )
+        return f"Call initiated with SID: {call.sid}"
+    except Exception as e:
+        return f"Error making call: {str(e)}"
+
+    return {"status": "success"}
+
 @app.get("/", response_class=JSONResponse)
 async def index_page():
     return {"message": "Twilio Media Stream Server is running!"}
@@ -157,9 +246,10 @@ async def handle_incoming_call(request: Request):
     """Handle incoming call and return TwiML response to connect to Media Stream."""
     response = VoiceResponse()
     # <Say> punctuation to improve text-to-speech flow
-    response.say("Please wait while we connect your call to the your personal AI Medical assistant")
-    response.pause(length=0.5)
-    response.say("'Hello! You’ve reached MeetOcean, your virtual medical assistant. How can I assist you today?")
+    #response.say("Please wait while we connect your call to the your personal AI Medical assistant")
+    #@response.pause(length=0.5)
+    #response.say("'Hello! You’ve reached MeetOcean, your virtual medical assistant. How can I assist you today?")
+    response.say("Welcome!")
     host = request.url.hostname
     connect = Connect()
     connect.stream(url=f'wss://{host}/media-stream')
@@ -226,20 +316,23 @@ async def handle_media_stream(websocket: WebSocket):
 
                 async def handle_tool_call(srv, tool_name, args, call_id):
                     try:
+                        print("\n STARTING CALL!\n")
                         result = await srv.call_tool(tool_name, args)
                         # extract text safely
                         text_output = result.content[0].text
+                        print(f"\n TOOL OUTPUT! {text_output}\n")
 
-                        await websocket.send_json({
+                        await openai_ws.send(json.dumps({
                             "type": "conversation.item.create",
                             "item": {
                                 "type":    "function_call_output",
                                 "call_id": call_id,
                                 "output":  text_output
                             }
-                        })
+                        }))
+                        await openai_ws.send(json.dumps({ "type": "response.create" }))
                     except Exception as e:
-                        print(f"[tool error] {tool_name}: {e!r}")
+                        print(f"\n\n\nTOOL ERRORR\n\n\n {e}")
 
 
                 try:
@@ -256,6 +349,10 @@ async def handle_media_stream(websocket: WebSocket):
                                 raw_args  = item.get("arguments", "{}")
                                 args      = json.loads(raw_args)
 
+                                if tool_name == "user_accepted":
+                                    
+                                elif tool_name == "user_declined":
+
                                 # dispatch to the right MCP server
                                 srv = tool_name_to_server.get(tool_name)
                                 if not srv:
@@ -263,7 +360,8 @@ async def handle_media_stream(websocket: WebSocket):
                                 else:
 
                                     # inject the function output back into the conversation
-                                    await websocket.send_json({
+                                    '''
+                                    await openai_ws.send_json({
                                         "type": "conversation.item.create",
                                         "item": {
                                             "type":    "function_call_output",
@@ -271,8 +369,11 @@ async def handle_media_stream(websocket: WebSocket):
                                             "output":  "Tool call started. You will be provided result in a second."
                                         }
                                     })
+                                    
                                     await openai_ws.send(json.dumps({ "type": "response.create" }))
-
+                                    '''
+                                    
+                                    print("\nCALLING TOOL!\n")
                                     asyncio.create_task(handle_tool_call(srv, tool_name, args, item["call_id"]))
 
                                     # tell the Realtime API to resume streaming its response
@@ -377,7 +478,7 @@ async def send_initial_conversation_item(openai_ws):
 
 async def initialize_session(openai_ws):
     """Initialize the session with OpenAI."""
-
+    '''
     functions = []
     for srv in mcp_servers:
         defs = await srv.list_tools()
@@ -388,6 +489,7 @@ async def initialize_session(openai_ws):
                 "description": d.description,
                 "parameters":  d.inputSchema,
             })
+    '''
 
     session_update = {
         "type": "session.update",
@@ -399,8 +501,30 @@ async def initialize_session(openai_ws):
             "instructions": SYSTEM_MESSAGE,
             "modalities": ["text", "audio"],
             "temperature": 0.8,
-            "tools": functions,
-            "tool_choice": "auto",
+            "tools": [
+                {
+                    "type":        "function",
+                    "name":        "user_accepted",
+                    "description": "Call when the user is deemed fit for the position",
+                    "parameters": {
+                        "type":       "object",
+                        "properties": {},
+                        "required":   []
+                    }
+                },
+                {
+                    "type":        "function",
+                    "name":        "user_declined",
+                    "description": "Call when the user is deemed failed and not ready",
+                    "parameters": {
+                        "type":       "object",
+                        "properties": {},
+                        "required":   []
+                    }
+                }
+            ],
+            #"tools": functions,
+            "tool_choice": "auto"
         }
     }
     print('Sending session update:', json.dumps(session_update))
